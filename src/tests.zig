@@ -23,6 +23,30 @@ const Sink = struct {
     }
 };
 
+const AllocatorSink = struct {
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList(u8),
+
+    pub fn writeAll(self: *AllocatorSink, bytes: []const u8) !void {
+        try self.list.appendSlice(self.allocator, bytes);
+    }
+};
+
+fn exerciseAllAllocationPaths(allocator: std.mem.Allocator) !void {
+    const built = try fixture.build(allocator, .{});
+    defer built.deinit(allocator);
+
+    var reader: input.MemoryReader = .{ .bytes = built.bytes };
+    const image = try elf.Image.parse(&reader);
+    const note = try image.findVmcoreInfo(&reader);
+    const metadata = try vmcoreinfo.parse(&reader, note.offset, note.size);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    var sink: AllocatorSink = .{ .allocator = allocator, .list = &output };
+    try printk.extract(allocator, &reader, &sink, image, metadata, false);
+}
+
 fn runFixture(options: fixture.Options, live: bool) !std.ArrayList(u8) {
     const built = try fixture.build(std.testing.allocator, options);
     defer built.deinit(std.testing.allocator);
@@ -63,6 +87,14 @@ test "end-to-end output matches vmcore-dmesg for every ELF class and byte order"
         defer output.deinit(std.testing.allocator);
         try std.testing.expectEqualStrings(expected, output.items);
     };
+}
+
+test "all allocation failures release previously allocated memory" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseAllAllocationPaths,
+        .{},
+    );
 }
 
 test "direct-map fallback resolves ring memory" {

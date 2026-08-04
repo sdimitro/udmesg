@@ -89,6 +89,11 @@ The test suite builds synthetic sparse ELF cores covering:
 - descriptor ID wraparound and live descriptor mutation; and
 - malformed ELF, VMCOREINFO, address, and ring geometry.
 
+`zig build test` also exhaustively injects an out-of-memory failure at every
+allocation point in a full extraction and verifies that all earlier allocations
+are released. Zig's testing allocator reports leaks, double frees, and invalid
+frees in the rest of the test suite.
+
 Golden output follows `vmcore-dmesg`: timestamps are truncated to microseconds,
 ASCII printable and whitespace bytes pass through, other bytes use lowercase
 `\\xNN`, and every emitted record ends in a newline.

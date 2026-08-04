@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
 
 permissions:
@@ -34,7 +34,7 @@ jobs:
       - name: Check shell scripts
         run: shellcheck tools/*.sh
 
-      - name: Run debug tests
+      - name: Run debug tests, including allocation-failure leak checks
         run: zig build test
 
       - name: Run ReleaseSafe tests
