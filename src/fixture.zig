@@ -10,6 +10,7 @@ pub const Options = struct {
     extended_program_header_count: bool = false,
     wrap_ids: bool = false,
     invalid_last_text_range: bool = false,
+    unavailable_physical_address: bool = false,
 };
 
 pub const Built = struct {
@@ -128,7 +129,10 @@ pub fn build(allocator: std.mem.Allocator, options: Options) !Built {
         .kind = 1,
         .offset = load_offset,
         .vaddr = if (options.direct_map_fallback) 0 else vbase,
-        .paddr = pbase,
+        .paddr = if (options.unavailable_physical_address)
+            (if (options.class == .elf32) std.math.maxInt(u32) else std.math.maxInt(u64))
+        else
+            pbase,
         .filesz = load_size,
         .memsz = load_size,
     });

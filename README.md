@@ -106,16 +106,8 @@ the host's `time` implementation exposes it.
 ## Releases
 
 Pushing an explicit `vMAJOR.MINOR.PATCH` tag runs the release workflow. It
-builds static amd64 and arm64 binaries, generates individual SHA-256 files, and
-publishes all four assets in a GitHub Release with generated notes. Tags are
-never created automatically from `main`.
-
-## Provenance and license
-
-The ELF, VMCOREINFO, and printk behavior is derived from the GPL-licensed
-`vmcore-dmesg` implementation in kexec-tools, including Serapheim
-Dimitropoulos's bounded-memory lockless-ring patch at commit
-`f2185f602cae4ec01e2aaf8c199a5a52ec52101e`.
-
-`udmesg` is distributed under the GNU General Public License, version 2 or (at
-your option) any later version. See [LICENSE](LICENSE).
+builds static amd64 and arm64 binaries and installable Debian packages, then
+publishes each artifact and its SHA-256 file in a GitHub Release with generated
+notes. Debian packages use names such as `udmesg_0.1.0_amd64.deb` and install
+the executable at `/usr/bin/udmesg`. Tags are never created automatically from
+`main`.

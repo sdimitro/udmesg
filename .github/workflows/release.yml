@@ -66,16 +66,30 @@ jobs:
           -Doptimize=ReleaseSmall
           -Dversion=${{ needs.validate.outputs.version }}
 
-      - name: Stage and verify asset
+      - name: Stage and verify assets
         shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          ARCH: ${{ matrix.asset_arch }}
         run: |
           set -euo pipefail
-          asset="udmesg-linux-${{ matrix.asset_arch }}"
+          asset="udmesg-linux-$ARCH"
+          deb="udmesg_${VERSION}_${ARCH}.deb"
           install -m 0755 zig-out/bin/udmesg "$asset"
           file "$asset" | tee /dev/stderr | grep -q 'statically linked'
           ! readelf --program-headers "$asset" | grep -q 'INTERP'
           ! readelf --dynamic "$asset" 2>/dev/null | grep -q 'NEEDED'
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) tools/build-deb.sh "$VERSION" "$ARCH" "$asset" "$deb"
+          test "$(dpkg-deb --field "$deb" Package)" = udmesg
+          test "$(dpkg-deb --field "$deb" Version)" = "$VERSION"
+          test "$(dpkg-deb --field "$deb" Architecture)" = "$ARCH"
+          package_root="$RUNNER_TEMP/package-$ARCH"
+          dpkg-deb --extract "$deb" "$package_root"
+          cmp "$asset" "$package_root/usr/bin/udmesg"
+          test -x "$package_root/usr/bin/udmesg"
+          test -f "$package_root/usr/share/doc/udmesg/copyright"
           sha256sum "$asset" > "$asset.sha256"
+          sha256sum "$deb" > "$deb.sha256"
 
       - name: Upload architecture artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -84,6 +98,8 @@ jobs:
           path: |
             udmesg-linux-${{ matrix.asset_arch }}
             udmesg-linux-${{ matrix.asset_arch }}.sha256
+            udmesg_${{ needs.validate.outputs.version }}_${{ matrix.asset_arch }}.deb
+            udmesg_${{ needs.validate.outputs.version }}_${{ matrix.asset_arch }}.deb.sha256
 
   release:
     name: Publish GitHub Release
@@ -105,14 +121,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          assets=(release-assets/udmesg-linux-*)
-          if (( ${#assets[@]} != 4 )); then
-            echo "expected four release assets, found ${#assets[@]}" >&2
-            exit 1
-          fi
+          assets=(
+            release-assets/udmesg-linux-amd64
+            release-assets/udmesg-linux-amd64.sha256
+            release-assets/udmesg-linux-arm64
+            release-assets/udmesg-linux-arm64.sha256
+            "release-assets/udmesg_${VERSION}_amd64.deb"
+            "release-assets/udmesg_${VERSION}_amd64.deb.sha256"
+            "release-assets/udmesg_${VERSION}_arm64.deb"
+            "release-assets/udmesg_${VERSION}_arm64.deb.sha256"
+          )
+          for asset in "${assets[@]}"; do
+            test -f "$asset" || { echo "missing release asset: $asset" >&2; exit 1; }
+          done
+          (cd release-assets && sha256sum --check ./*.sha256)
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${assets[@]}" --clobber
           else

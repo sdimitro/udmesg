@@ -71,6 +71,21 @@ test "direct-map fallback resolves ring memory" {
     try std.testing.expect(std.mem.startsWith(u8, output.items, "[    1.234567] hello\n"));
 }
 
+test "/proc/kcore physical-address sentinels do not block virtual mappings" {
+    const expected = "[    1.234567] hello\n[    2.000000] \n[   12.034567] b\\x01\n\n";
+    const classes = [_]elf.Class{ .elf32, .elf64 };
+    const orders = [_]elf.ByteOrder{ .little, .big };
+    for (classes) |class| for (orders) |order| {
+        var output = try runFixture(.{
+            .class = class,
+            .order = order,
+            .unavailable_physical_address = true,
+        }, false);
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectEqualStrings(expected, output.items);
+    };
+}
+
 test "text length is truncated to the descriptor block" {
     const expected = "[    1.234567] hello\n[    2.000000] \n[   12.034567] b\\x01\n\n";
     const built = try fixture.build(std.testing.allocator, .{});

@@ -29,10 +29,16 @@ jobs:
           echo "$RUNNER_TEMP/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
 
       - name: Check formatting
-        run: zig fmt --check build.zig src tools/make_fixture.zig
+        run: zig fmt --check build.zig build.zig.zon src tools/make_fixture.zig
 
-      - name: Run tests
+      - name: Check shell scripts
+        run: shellcheck tools/*.sh
+
+      - name: Run debug tests
         run: zig build test
+
+      - name: Run ReleaseSafe tests
+        run: zig build test -Doptimize=ReleaseSafe
 
       - name: Build static release binaries
         run: zig build release -Dversion=0.1.0-ci
@@ -47,6 +53,24 @@ jobs:
             ! readelf --dynamic "$binary" 2>/dev/null | grep -q 'NEEDED'
           done
           test "$(zig-out/bin/udmesg-linux-amd64 --version)" = 'udmesg 0.1.0-ci'
+
+      - name: Build and verify Debian packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p zig-out/deb
+          for arch in amd64 arm64; do
+            binary="zig-out/bin/udmesg-linux-$arch"
+            deb="zig-out/deb/udmesg_0.1.0_$arch.deb"
+            SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) tools/build-deb.sh 0.1.0 "$arch" "$binary" "$deb"
+            test "$(dpkg-deb --field "$deb" Package)" = udmesg
+            test "$(dpkg-deb --field "$deb" Version)" = 0.1.0
+            test "$(dpkg-deb --field "$deb" Architecture)" = "$arch"
+            package_root="$RUNNER_TEMP/deb-$arch"
+            dpkg-deb --extract "$deb" "$package_root"
+            cmp "$binary" "$package_root/usr/bin/udmesg"
+            test -x "$package_root/usr/bin/udmesg"
+          done
 
       - name: Benchmark bounded-memory fixture
         shell: bash
@@ -68,3 +92,5 @@ jobs:
           path: |
             zig-out/bin/udmesg-linux-amd64
             zig-out/bin/udmesg-linux-arm64
+            zig-out/deb/udmesg_0.1.0_amd64.deb
+            zig-out/deb/udmesg_0.1.0_arm64.deb

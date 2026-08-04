@@ -1,2 +1,14 @@
+## Zig build state
 /.zig-cache/
+/zig-cache/
 /zig-out/
+
+## Locally staged release assets
+/udmesg-linux-*
+/udmesg_*.deb
+/udmesg_*.deb.sha256
+
+## macOS metadata
+.DS_Store
+.AppleDouble
+.LSOverride

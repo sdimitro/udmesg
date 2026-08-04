@@ -119,7 +119,10 @@ pub const Image = struct {
         };
         _ = try rangeEnd(ph.offset, ph.filesz);
         _ = try rangeEnd(ph.vaddr, ph.memsz);
-        _ = try rangeEnd(ph.paddr, ph.memsz);
+        // /proc/kcore uses an all-ones p_paddr for mappings that have no
+        // meaningful physical address. The virtual mapping remains valid.
+        if (!self.physicalAddressUnavailable(ph.paddr))
+            _ = try rangeEnd(ph.paddr, ph.memsz);
         return ph;
     }
 
@@ -187,13 +190,18 @@ pub const Image = struct {
             i = 0;
             while (i < self.phnum) : (i += 1) {
                 const ph = try self.programHeader(reader, i);
-                if (ph.kind != 1 or paddr < ph.paddr) continue;
+                if (ph.kind != 1 or self.physicalAddressUnavailable(ph.paddr) or paddr < ph.paddr) continue;
                 const file_pend = try rangeEnd(ph.paddr, ph.filesz);
                 if (pend > file_pend) continue;
                 return .{ .offset = try add(ph.offset, paddr - ph.paddr), .size = size };
             }
         };
         return error.UnmappedKernelAddress;
+    }
+
+    fn physicalAddressUnavailable(self: Image, paddr: u64) bool {
+        const unavailable: u64 = if (self.class == .elf32) std.math.maxInt(u32) else std.math.maxInt(u64);
+        return paddr == unavailable;
     }
 
     pub fn readWord(self: Image, bytes: []const u8) u64 {
