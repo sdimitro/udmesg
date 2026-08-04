@@ -64,6 +64,7 @@ jobs:
           zig build
           -Dtarget=${{ matrix.target }}
           -Doptimize=ReleaseSmall
+          -Dstrip=true
           -Dversion=${{ needs.validate.outputs.version }}
 
       - name: Stage and verify assets
@@ -77,6 +78,7 @@ jobs:
           deb="udmesg_${VERSION}_${ARCH}.deb"
           install -m 0755 zig-out/bin/udmesg "$asset"
           file "$asset" | tee /dev/stderr | grep -q 'statically linked'
+          file "$asset" | grep -q 'stripped'
           ! readelf --program-headers "$asset" | grep -q 'INTERP'
           ! readelf --dynamic "$asset" 2>/dev/null | grep -q 'NEEDED'
           SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) tools/build-deb.sh "$VERSION" "$ARCH" "$asset" "$deb"

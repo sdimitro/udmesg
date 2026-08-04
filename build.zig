@@ -5,9 +5,10 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const strip = b.option(bool, "strip", "Strip symbols and debug information") orelse false;
     const version = b.option([]const u8, "version", "Version reported by --version") orelse "0.1.0-dev";
 
-    const exe = addUdmesg(b, target, optimize, false, version, "udmesg");
+    const exe = addUdmesg(b, target, optimize, strip, version, "udmesg");
     b.installArtifact(exe);
 
     const tests = b.addTest(.{
