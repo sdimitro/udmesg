@@ -6,20 +6,21 @@ const build_options = @import("build_options");
 const cli = @import("cli.zig");
 const elf = @import("elf.zig");
 const input = @import("input.zig");
+const kdump = @import("kdump.zig");
 const printk = @import("printk.zig");
 const vmcoreinfo = @import("vmcoreinfo.zig");
 
+const app_name = if (build_options.kdump) "udmesg-kdump" else "udmesg";
 const usage =
-    \\Usage: udmesg [OPTIONS] CORE
-    \\
-    \\Extract the modern lockless Linux printk ring from a raw ELF kcore or vmcore.
-    \\
-    \\Options:
-    \\  -o, --output PATH  Write to PATH instead of stdout; '-' means stdout
-    \\  -h, --help         Show this help
-    \\      --version      Show the program version
-    \\
-;
+    "Usage: " ++ app_name ++ (if (build_options.kdump) " [OPTIONS] CORE [CORE...]\n\n" else " [OPTIONS] CORE\n\n") ++
+    (if (build_options.kdump)
+        "Extract the modern lockless Linux printk ring from an ELF or makedumpfile core.\n\n"
+    else
+        "Extract the modern lockless Linux printk ring from a raw ELF kcore or vmcore.\n\n") ++
+    "Options:\n" ++
+    "  -o, --output PATH  Write to PATH instead of stdout; '-' means stdout\n" ++
+    "  -h, --help         Show this help\n" ++
+    "      --version      Show the program version\n";
 
 pub fn main(init: std.process.Init) u8 {
     return run(init) catch |err| {
@@ -34,17 +35,19 @@ fn reportError(err: anyerror) void {
         error.MissingPrintkMetadata => "unsupported printk format: required lockless-ring VMCOREINFO metadata is missing",
         error.MissingVmcoreInfo => "VMCOREINFO was not found in the ELF notes",
         error.InputOutputAlias => "refusing to overwrite the input core file",
-        else => return std.debug.print("udmesg: {s}\n", .{@errorName(err)}),
+        else => return std.debug.print("{s}: {s}\n", .{ app_name, @errorName(err) }),
     };
-    std.debug.print("udmesg: {s}\n", .{message});
+    std.debug.print("{s}: {s}\n", .{ app_name, message });
 }
 
 fn run(init: std.process.Init) !u8 {
-    const args = try init.minimal.args.toSlice(init.arena.allocator());
-    const options = cli.parse(args) catch |err| {
-        std.debug.print("udmesg: {s}\n\n{s}", .{ @errorName(err), usage });
+    const allocator = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(allocator);
+    const options = cli.parse(allocator, args, build_options.kdump) catch |err| {
+        std.debug.print("{s}: {s}\n\n{s}", .{ app_name, @errorName(err), usage });
         return 2;
     };
+    defer allocator.free(options.inputs);
     switch (options.action) {
         .help => {
             try std.Io.File.stdout().writeStreamingAll(init.io, usage);
@@ -53,26 +56,51 @@ fn run(init: std.process.Init) !u8 {
         .version => {
             var buffer: [128]u8 = undefined;
             var writer = std.Io.File.stdout().writerStreaming(init.io, &buffer);
-            try writer.interface.print("udmesg {s}\n", .{build_options.version});
+            try writer.interface.print("{s} {s}\n", .{ app_name, build_options.version });
             try writer.interface.flush();
             return 0;
         },
         .extract => {},
     }
 
-    const input_file = try openRead(init.io, options.input.?);
-    defer input_file.close(init.io);
-    const live = try isLiveInput(init.io, input_file);
-    var file_reader: input.FileReader = .{ .file = input_file, .io = init.io };
-    const image = try elf.Image.parse(&file_reader);
-    const vmcore_region = try image.findVmcoreInfo(&file_reader);
-    const metadata = try vmcoreinfo.parse(&file_reader, vmcore_region.offset, vmcore_region.size);
+    const input_files = try allocator.alloc(std.Io.File, options.inputs.len);
+    defer allocator.free(input_files);
+    var opened: usize = 0;
+    defer for (input_files[0..opened]) |file| file.close(init.io);
+    for (options.inputs) |path| {
+        input_files[opened] = try openRead(init.io, path);
+        opened += 1;
+    }
+    const live = input_files.len == 1 and try isLiveInput(init.io, input_files[0]);
+    if (build_options.kdump and !live) {
+        var reader = try kdump.Reader.open(allocator, input_files);
+        defer reader.close();
+        const image = try reader.image();
+        const metadata = try reader.metadata();
+        return extract(init, options, input_files, &reader, image, metadata, false);
+    }
 
+    var reader: input.FileReader = .{ .file = input_files[0], .io = init.io };
+    const image = try elf.Image.parse(&reader);
+    const vmcore_region = try image.findVmcoreInfo(&reader);
+    const metadata = try vmcoreinfo.parse(&reader, vmcore_region.offset, vmcore_region.size);
+    return extract(init, options, input_files, &reader, image, metadata, live);
+}
+
+fn extract(
+    init: std.process.Init,
+    options: cli.Options,
+    input_files: []const std.Io.File,
+    reader: anytype,
+    image: anytype,
+    metadata: vmcoreinfo.Metadata,
+    live: bool,
+) !u8 {
     var output_file: ?std.Io.File = null;
     if (options.output) |path| if (!std.mem.eql(u8, path, "-")) {
         const file = try createWithoutTruncating(init.io, path);
         errdefer file.close(init.io);
-        if (try sameFile(init.io, input_file, file)) return error.InputOutputAlias;
+        for (input_files) |input_file| if (try sameFile(init.io, input_file, file)) return error.InputOutputAlias;
         try file.setLength(init.io, 0);
         output_file = file;
     };
@@ -84,7 +112,7 @@ fn run(init: std.process.Init) !u8 {
     var sink: Sink = .{ .writer = &file_writer.interface };
     var flushed = false;
     defer if (!flushed) file_writer.interface.flush() catch {};
-    try printk.extract(init.arena.allocator(), &file_reader, &sink, image, metadata, live);
+    try printk.extract(init.arena.allocator(), reader, &sink, image, metadata, live);
     try file_writer.interface.flush();
     flushed = true;
     return 0;

@@ -35,29 +35,38 @@ jobs:
   build:
     name: Build ${{ matrix.asset_arch }}
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
           - target: x86_64-linux-musl
             asset_arch: amd64
+            zig_arch: x86_64
+            zig_sha: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+            runner: ubuntu-24.04
           - target: aarch64-linux-musl
             asset_arch: arm64
+            zig_arch: aarch64
+            zig_sha: ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout tag
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Zig 0.16.0
         shell: bash
+        env:
+          ZIG_ARCH: ${{ matrix.zig_arch }}
+          ZIG_SHA: ${{ matrix.zig_sha }}
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/zig.tar.xz"
           curl --fail --location --proto '=https' --tlsv1.2 \
-            https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz \
+            "https://ziglang.org/download/0.16.0/zig-${ZIG_ARCH}-linux-0.16.0.tar.xz" \
             --output "$archive"
-          echo '70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  '"$archive" | sha256sum --check
+          echo "$ZIG_SHA  $archive" | sha256sum --check
           tar --extract --xz --file "$archive" --directory "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/zig-${ZIG_ARCH}-linux-0.16.0" >> "$GITHUB_PATH"
 
       - name: Build static binary
         run: >-
@@ -67,6 +76,12 @@ jobs:
           -Dstrip=true
           -Dversion=${{ needs.validate.outputs.version }}
 
+      - name: Build static kdump binary
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: docker run --rm -v "$PWD:/work" -w /work alpine:3.22 sh tools/build-kdump-static.sh "$VERSION"
+
       - name: Stage and verify assets
         shell: bash
         env:
@@ -75,23 +90,40 @@ jobs:
         run: |
           set -euo pipefail
           asset="udmesg-linux-$ARCH"
+          kdump_asset="udmesg-kdump-linux-$ARCH"
           deb="udmesg_${VERSION}_${ARCH}.deb"
+          kdump_deb="udmesg-kdump_${VERSION}_${ARCH}.deb"
           install -m 0755 zig-out/bin/udmesg "$asset"
+          install -m 0755 "zig-out/bin/$kdump_asset" "$kdump_asset"
           file "$asset" | tee /dev/stderr | grep -q 'statically linked'
           file "$asset" | grep -q 'stripped'
+          file "$kdump_asset" | tee /dev/stderr | grep -q 'statically linked'
+          file "$kdump_asset" | grep -q 'stripped'
           ! readelf --program-headers "$asset" | grep -q 'INTERP'
           ! readelf --dynamic "$asset" 2>/dev/null | grep -q 'NEEDED'
+          ! readelf --program-headers "$kdump_asset" | grep -q 'INTERP'
+          ! readelf --dynamic "$kdump_asset" 2>/dev/null | grep -q 'NEEDED'
           SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) tools/build-deb.sh "$VERSION" "$ARCH" "$asset" "$deb"
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) tools/build-deb.sh "$VERSION" "$ARCH" "$kdump_asset" "$kdump_deb" udmesg-kdump
           test "$(dpkg-deb --field "$deb" Package)" = udmesg
+          test "$(dpkg-deb --field "$kdump_deb" Package)" = udmesg-kdump
           test "$(dpkg-deb --field "$deb" Version)" = "$VERSION"
+          test "$(dpkg-deb --field "$kdump_deb" Version)" = "$VERSION"
           test "$(dpkg-deb --field "$deb" Architecture)" = "$ARCH"
+          test "$(dpkg-deb --field "$kdump_deb" Architecture)" = "$ARCH"
           package_root="$RUNNER_TEMP/package-$ARCH"
           dpkg-deb --extract "$deb" "$package_root"
           cmp "$asset" "$package_root/usr/bin/udmesg"
           test -x "$package_root/usr/bin/udmesg"
           test -f "$package_root/usr/share/doc/udmesg/copyright"
+          kdump_root="$RUNNER_TEMP/kdump-package-$ARCH"
+          dpkg-deb --extract "$kdump_deb" "$kdump_root"
+          cmp "$kdump_asset" "$kdump_root/usr/bin/udmesg-kdump"
+          test -f "$kdump_root/usr/share/doc/udmesg-kdump/copyright"
           sha256sum "$asset" > "$asset.sha256"
+          sha256sum "$kdump_asset" > "$kdump_asset.sha256"
           sha256sum "$deb" > "$deb.sha256"
+          sha256sum "$kdump_deb" > "$kdump_deb.sha256"
 
       - name: Upload architecture artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -100,8 +132,12 @@ jobs:
           path: |
             udmesg-linux-${{ matrix.asset_arch }}
             udmesg-linux-${{ matrix.asset_arch }}.sha256
+            udmesg-kdump-linux-${{ matrix.asset_arch }}
+            udmesg-kdump-linux-${{ matrix.asset_arch }}.sha256
             udmesg_${{ needs.validate.outputs.version }}_${{ matrix.asset_arch }}.deb
             udmesg_${{ needs.validate.outputs.version }}_${{ matrix.asset_arch }}.deb.sha256
+            udmesg-kdump_${{ needs.validate.outputs.version }}_${{ matrix.asset_arch }}.deb
+            udmesg-kdump_${{ needs.validate.outputs.version }}_${{ matrix.asset_arch }}.deb.sha256
 
   release:
     name: Publish GitHub Release
@@ -131,10 +167,18 @@ jobs:
             release-assets/udmesg-linux-amd64.sha256
             release-assets/udmesg-linux-arm64
             release-assets/udmesg-linux-arm64.sha256
+            release-assets/udmesg-kdump-linux-amd64
+            release-assets/udmesg-kdump-linux-amd64.sha256
+            release-assets/udmesg-kdump-linux-arm64
+            release-assets/udmesg-kdump-linux-arm64.sha256
             "release-assets/udmesg_${VERSION}_amd64.deb"
             "release-assets/udmesg_${VERSION}_amd64.deb.sha256"
             "release-assets/udmesg_${VERSION}_arm64.deb"
             "release-assets/udmesg_${VERSION}_arm64.deb.sha256"
+            "release-assets/udmesg-kdump_${VERSION}_amd64.deb"
+            "release-assets/udmesg-kdump_${VERSION}_amd64.deb.sha256"
+            "release-assets/udmesg-kdump_${VERSION}_arm64.deb"
+            "release-assets/udmesg-kdump_${VERSION}_arm64.deb.sha256"
           )
           for asset in "${assets[@]}"; do
             test -f "$asset" || { echo "missing release asset: $asset" >&2; exit 1; }
