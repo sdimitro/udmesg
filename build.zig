@@ -7,9 +7,24 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Strip symbols and debug information") orelse false;
     const version = b.option([]const u8, "version", "Version reported by --version") orelse "0.1.0-dev";
+    const kdump_prefix = b.option([]const u8, "kdump-prefix", "Directory containing static libkdumpfile and codec archives");
 
-    const exe = addUdmesg(b, target, optimize, strip, version, "udmesg");
+    const exe = addUdmesg(b, target, optimize, strip, version, "udmesg", null);
     b.installArtifact(exe);
+    if (kdump_prefix) |prefix| {
+        const kdump_exe = addUdmesg(b, target, optimize, strip, version, "udmesg-kdump", prefix);
+        b.installArtifact(kdump_exe);
+        const arch = switch (target.result.cpu.arch) {
+            .x86_64 => "amd64",
+            .aarch64 => "arm64",
+            else => @panic("udmesg-kdump release supports amd64 and arm64 hosts"),
+        };
+        const asset = b.fmt("udmesg-kdump-linux-{s}", .{arch});
+        const release_exe = addUdmesg(b, target, .ReleaseSmall, true, version, asset, prefix);
+        const install = b.addInstallArtifact(release_exe, .{ .dest_sub_path = asset });
+        const kdump_release = b.step("kdump-release", "Build a static kdump-enabled Linux binary");
+        kdump_release.dependOn(&install.step);
+    }
 
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -33,7 +48,7 @@ pub fn build(b: *std.Build) void {
     addRelease(b, release_step, .x86_64, "udmesg-linux-amd64", version);
     addRelease(b, release_step, .aarch64, "udmesg-linux-arm64", version);
 
-    const bench_exe = addUdmesg(b, target, .ReleaseSmall, true, version, "udmesg-bench");
+    const bench_exe = addUdmesg(b, target, .ReleaseSmall, true, version, "udmesg-bench", null);
     const bench = b.addSystemCommand(&.{ "sh", "tools/bench.sh" });
     bench.addArtifactArg(bench_exe);
     bench.addArtifactArg(fixture_exe);
@@ -75,9 +90,11 @@ fn addUdmesg(
     strip: bool,
     version: []const u8,
     name: []const u8,
+    kdump_prefix: ?[]const u8,
 ) *std.Build.Step.Compile {
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);
+    options.addOption(bool, "kdump", kdump_prefix != null);
 
     const module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -87,6 +104,21 @@ fn addUdmesg(
         .single_threaded = true,
     });
     module.addOptions("build_options", options);
+    if (kdump_prefix) |prefix| {
+        module.link_libc = true;
+        module.addCSourceFile(.{ .file = b.path("src/kdump_bridge.c"), .flags = &.{"-std=c11"} });
+        module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{prefix}) });
+        for ([_][]const u8{
+            "libkdumpfile.a",
+            "libaddrxlat.a",
+            "libzstd.a",
+            "libsnappy.a",
+            "liblzo2.a",
+            "libz.a",
+            "libstdc++.a",
+            "libgcc_eh.a",
+        }) |archive| module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/{s}", .{ prefix, archive }) });
+    }
 
     return b.addExecutable(.{
         .name = name,
@@ -107,7 +139,7 @@ fn addRelease(
         .os_tag = .linux,
         .abi = .musl,
     });
-    const exe = addUdmesg(b, target, .ReleaseSmall, true, version, asset_name);
+    const exe = addUdmesg(b, target, .ReleaseSmall, true, version, asset_name, null);
     const install = b.addInstallArtifact(exe, .{ .dest_sub_path = asset_name });
     release_step.dependOn(&install.step);
 }

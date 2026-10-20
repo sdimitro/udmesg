@@ -28,6 +28,8 @@ pub const Metadata = struct {
     phys_offset: ?u64 = null,
     phys_ram_base: ?u64 = null,
     page_offset: ?u64 = null,
+    kimage_voffset: ?u64 = null,
+    va_bits: ?u64 = null,
 
     pub fn effectivePhysOffset(self: Metadata) ?u64 {
         return self.phys_offset orelse self.phys_ram_base;
@@ -92,6 +94,8 @@ fn parseLine(meta: *Metadata, line: []const u8) !void {
     try setAuto(line, "NUMBER(PHYS_OFFSET)=", &meta.phys_offset);
     try setAuto(line, "NUMBER(phys_ram_base)=", &meta.phys_ram_base);
     try setHex(line, "NUMBER(PAGE_OFFSET)=", &meta.page_offset);
+    try setHex(line, "NUMBER(kimage_voffset)=", &meta.kimage_voffset);
+    try setDecimal(line, "NUMBER(VA_BITS)=", &meta.va_bits);
 }
 
 fn setDecimal(line: []const u8, prefix: []const u8, field: *?u64) !void {

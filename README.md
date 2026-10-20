@@ -13,9 +13,14 @@ modern lockless printk ring stored in a raw ELF core. It was created for
 memory-constrained crash kernels where copying a large descriptor, info, and
 text ring can trigger the OOM killer before any log is recovered.
 
-The extractor keeps one descriptor, one info record, and at most one `u16`
+The printk decoder keeps one descriptor, one info record, and at most one `u16`
 length text record in memory. Its memory use therefore does not grow with the
 configured printk ring size or the number of descriptors.
+
+There are two binaries. `udmesg` keeps the dependency-free raw ELF reader.
+`udmesg-kdump` links libkdumpfile and its compression codecs statically to read
+saved makedumpfile dumps, including compressed and flattened dumps. Its target
+architecture can differ from the architecture of the binary running it.
 
 ## Usage
 
@@ -34,6 +39,8 @@ Examples:
 udmesg /proc/vmcore > dmesg.txt
 udmesg -o dmesg.txt /proc/vmcore
 udmesg /proc/kcore
+udmesg-kdump dump.202610071921 > dmesg.txt
+udmesg-kdump -o dmesg.txt dump.part1 dump.part2
 ```
 
 Output files are checked against the input by device and inode before they are
@@ -57,10 +64,12 @@ extended program-header counts, direct virtual mappings, and the
 The architecture of the binary running `udmesg` does not need to match the
 architecture recorded in the core.
 
-Version 0.1 supports only the modern lockless printk ring identified by
-`SYMBOL(prb)` in VMCOREINFO. Legacy byte rings, the older structured record
-format, makedumpfile-compressed dumps, stdin, decompression, and external symbol
-lookup are intentionally out of scope.
+`udmesg-kdump` also accepts the ELF, KDUMP-compressed, flattened ELF/KDUMP, and
+split KDUMP formats supported by libkdumpfile 0.5.6. Pass every part of a split
+dump as a positional argument. Its static build includes zlib, LZO, Snappy, and
+Zstandard support. Both binaries require the modern lockless printk ring
+identified by `SYMBOL(prb)` in VMCOREINFO; legacy printk rings, stdin, and
+external symbol lookup remain unsupported.
 
 For live `/proc/kcore`, `udmesg` accepts finalized records only and verifies
 that each descriptor did not change while its data was being copied. For a
@@ -69,7 +78,8 @@ unfinalized by the crash.
 
 ## Build
 
-Zig 0.16.0 is required. There are no package or libc dependencies.
+Zig 0.16.0 is required. The plain `udmesg` build has no package or libc
+dependencies.
 
 ```sh
 zig build
@@ -83,6 +93,20 @@ zig build release
 zig-out/bin/udmesg-linux-amd64
 zig-out/bin/udmesg-linux-arm64
 ```
+
+Build `udmesg-kdump` on a native Linux amd64 or arm64 host with Docker:
+
+```sh
+docker run --rm -v "$PWD:/work" -w /work alpine:3.22 \
+  sh tools/build-kdump-static.sh 1.2.3
+```
+
+This pins the Codeberg libkdumpfile 0.5.6 source archive and Zig 0.16.0 by
+SHA-256, builds all compression codecs into the binary, and produces
+`zig-out/bin/udmesg-kdump-linux-amd64` or
+`zig-out/bin/udmesg-kdump-linux-arm64`. The binary needs no shared libraries
+at runtime. To use an existing static dependency build, pass its directory to
+`zig build kdump-release -Dkdump-prefix=DIR -Dtarget=ARCH-linux-musl`.
 
 Set a release version with `-Dversion=1.2.3`. Local builds default to
 `0.1.0-dev`.
@@ -106,6 +130,10 @@ Golden output follows `vmcore-dmesg`: timestamps are truncated to microseconds,
 ASCII printable and whitespace bytes pass through, other bytes use lowercase
 `\\xNN`, and every emitted record ends in a newline.
 
+The kdump binary was also exercised on Wreakit makedumpfile-compressed amd64
+and arm64 archives with the same arm64 executable. Its amd64 output matched the
+archived `dmesg` reference byte for byte.
+
 Run the repeatable benchmark with:
 
 ```sh
@@ -119,8 +147,13 @@ the host's `time` implementation exposes it.
 ## Releases
 
 Pushing an explicit `vMAJOR.MINOR.PATCH` tag runs the release workflow. It
-builds static amd64 and arm64 binaries and installable Debian packages, then
+builds static amd64 and arm64 binaries and installable Debian packages for both
+flavors, then
 publishes each artifact and its SHA-256 file in a GitHub Release with generated
 notes. Debian packages use names such as `udmesg_0.1.0_amd64.deb` and install
 the executable at `/usr/bin/udmesg`. Tags are never created automatically from
 `main`.
+
+The kdump assets are named `udmesg-kdump-linux-amd64` and
+`udmesg-kdump-linux-arm64`; Debian packages such as
+`udmesg-kdump_0.1.0_arm64.deb` install `/usr/bin/udmesg-kdump`.

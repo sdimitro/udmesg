@@ -13,15 +13,16 @@ pub fn extract(
     allocator: std.mem.Allocator,
     reader: anytype,
     writer: anytype,
-    image: elf.Image,
+    image: anytype,
     info: vmcoreinfo.Metadata,
     live: bool,
 ) !void {
+    const layout = image.layout();
     const prb_symbol = info.prb_vaddr orelse return error.UnsupportedPrintkFormat;
     const prb_size = try boundedSize(info.printk_ringbuffer_size);
     const desc_size = try boundedSize(info.prb_desc_size);
     const printk_info_size = try boundedSize(info.printk_info_size);
-    const word_size: u64 = image.wordSize();
+    const word_size: u64 = layout.wordSize();
 
     const desc_ring_offset = try required(info.printk_ringbuffer_desc_ring);
     const text_ring_offset = try required(info.printk_ringbuffer_text_data_ring);
@@ -30,8 +31,8 @@ pub fn extract(
 
     const symbol_region = try image.resolveRegion(reader, prb_symbol, word_size, info.page_offset, info.effectivePhysOffset());
     var pointer_bytes: [8]u8 = undefined;
-    try reader.readAt(symbol_region.offset, pointer_bytes[0..image.wordSize()]);
-    const prb_vaddr = image.readWord(pointer_bytes[0..image.wordSize()]);
+    try reader.readAt(symbol_region.offset, pointer_bytes[0..layout.wordSize()]);
+    const prb_vaddr = layout.readWord(pointer_bytes[0..layout.wordSize()]);
     if (prb_vaddr == 0) return error.InvalidPrintkRingAddress;
 
     const prb_region = try image.resolveRegion(reader, prb_vaddr, prb_size, info.page_offset, info.effectivePhysOffset());
@@ -56,30 +57,30 @@ pub fn extract(
     try validateField(printk_info_size, try required(info.printk_info_ts_nsec), 8);
     try validateField(printk_info_size, try required(info.printk_info_text_len), 2);
 
-    const count_bits = image.readU32(field(desc_ring, try required(info.prb_desc_ring_count_bits), 4));
-    if (count_bits >= image.pointerBits() - 2) return error.InvalidDescriptorCountBits;
+    const count_bits = layout.readU32(field(desc_ring, try required(info.prb_desc_ring_count_bits), 4));
+    if (count_bits >= layout.pointerBits() - 2) return error.InvalidDescriptorCountBits;
     const desc_count = @as(u64, 1) << @intCast(count_bits);
     const desc_region_size = try elf.mul(desc_size, desc_count);
     const info_region_size = try elf.mul(printk_info_size, desc_count);
 
-    const desc_vaddr = image.readWord(field(desc_ring, try required(info.prb_desc_ring_descs), word_size));
-    const info_vaddr = image.readWord(field(desc_ring, try required(info.prb_desc_ring_infos), word_size));
+    const desc_vaddr = layout.readWord(field(desc_ring, try required(info.prb_desc_ring_descs), word_size));
+    const info_vaddr = layout.readWord(field(desc_ring, try required(info.prb_desc_ring_infos), word_size));
     if (desc_vaddr == 0 or info_vaddr == 0) return error.InvalidPrintkRingAddress;
     const desc_region = try image.resolveRegion(reader, desc_vaddr, desc_region_size, info.page_offset, info.effectivePhysOffset());
     const info_region = try image.resolveRegion(reader, info_vaddr, info_region_size, info.page_offset, info.effectivePhysOffset());
 
-    const text_bits = image.readU32(field(text_ring, try required(info.prb_data_ring_size_bits), 4));
-    if (text_bits >= image.pointerBits()) return error.InvalidTextRingSizeBits;
+    const text_bits = layout.readU32(field(text_ring, try required(info.prb_data_ring_size_bits), 4));
+    if (text_bits >= layout.pointerBits()) return error.InvalidTextRingSizeBits;
     const text_size = @as(u64, 1) << @intCast(text_bits);
-    const text_vaddr = image.readWord(field(text_ring, try required(info.prb_data_ring_data), word_size));
+    const text_vaddr = layout.readWord(field(text_ring, try required(info.prb_data_ring_data), word_size));
     if (text_vaddr == 0) return error.InvalidPrintkRingAddress;
     const text_region = try image.resolveRegion(reader, text_vaddr, text_size, info.page_offset, info.effectivePhysOffset());
 
     const tail_offset = try elf.add(try required(info.prb_desc_ring_tail_id), atomic_offset);
     const head_offset = try elf.add(try required(info.prb_desc_ring_head_id), atomic_offset);
-    const tail_id = image.readWord(field(desc_ring, tail_offset, word_size));
-    const head_id = image.readWord(field(desc_ring, head_offset, word_size));
-    const id_mask: u64 = if (image.pointerBits() == 32) 0x3fffffff else 0x3fffffffffffffff;
+    const tail_id = layout.readWord(field(desc_ring, tail_offset, word_size));
+    const head_id = layout.readWord(field(desc_ring, head_offset, word_size));
+    const id_mask: u64 = if (layout.pointerBits() == 32) 0x3fffffff else 0x3fffffffffffffff;
     if ((tail_id & ~id_mask) != 0 or (head_id & ~id_mask) != 0) return error.InvalidDescriptorIds;
 
     const desc = try allocator.alloc(u8, @intCast(desc_size));
@@ -96,7 +97,7 @@ pub fn extract(
     while (true) {
         if (visited >= desc_count) return error.DescriptorSpanExceedsRing;
         visited += 1;
-        try dumpRecord(reader, writer, image, info, live, id, desc_count, desc_region, info_region, text_region, text_size, desc, verify, record_info, text);
+        try dumpRecord(reader, writer, layout, info, live, id, desc_count, desc_region, info_region, text_region, text_size, desc, verify, record_info, text);
         if (id == head_id) break;
         id = (id +% 1) & id_mask;
     }
@@ -105,7 +106,7 @@ pub fn extract(
 fn dumpRecord(
     reader: anytype,
     writer: anytype,
-    image: elf.Image,
+    layout: elf.Layout,
     info: vmcoreinfo.Metadata,
     live: bool,
     id: u64,
@@ -125,20 +126,20 @@ fn dumpRecord(
     try readRegion(reader, desc_region, desc_offset, desc);
 
     const state_offset = try elf.add(try required(info.prb_desc_state_var), try required(info.atomic_long_counter));
-    const state = image.readWord(field(desc, state_offset, image.wordSize()));
-    if (!recordReadable(image.pointerBits(), id, state, live)) return;
+    const state = layout.readWord(field(desc, state_offset, layout.wordSize()));
+    if (!recordReadable(layout.pointerBits(), id, state, live)) return;
 
     try readRegion(reader, info_region, info_offset, record_info);
     const begin_offset = try elf.add(try required(info.prb_desc_text_blk_lpos), try required(info.prb_data_blk_lpos_begin));
     const next_offset = try elf.add(try required(info.prb_desc_text_blk_lpos), try required(info.prb_data_blk_lpos_next));
-    var begin = image.readWord(field(desc, begin_offset, image.wordSize())) % text_ring_size;
-    const next = image.readWord(field(desc, next_offset, image.wordSize())) % text_ring_size;
+    var begin = layout.readWord(field(desc, begin_offset, layout.wordSize())) % text_ring_size;
+    const next = layout.readWord(field(desc, next_offset, layout.wordSize())) % text_ring_size;
     var text_len: u64 = 0;
 
     if (begin != next) {
-        text_len = image.readU16(field(record_info, try required(info.printk_info_text_len), 2));
+        text_len = layout.readU16(field(record_info, try required(info.printk_info_text_len), 2));
         if (begin > next) begin = 0;
-        begin = try elf.add(begin, image.wordSize());
+        begin = try elf.add(begin, layout.wordSize());
         if (begin > next) return error.InvalidTextBlockRange;
         text_len = @min(text_len, next - begin);
         try readRegion(reader, text_region, begin, text[0..@intCast(text_len)]);
@@ -149,7 +150,7 @@ fn dumpRecord(
         if (!std.mem.eql(u8, desc, verify)) return;
     }
 
-    const timestamp = image.readU64(field(record_info, try required(info.printk_info_ts_nsec), 8));
+    const timestamp = layout.readU64(field(record_info, try required(info.printk_info_ts_nsec), 8));
     try writeRecord(writer, timestamp, text[0..@intCast(text_len)]);
 }
 

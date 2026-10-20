@@ -5,6 +5,35 @@ const std = @import("std");
 pub const Class = enum { elf32, elf64 };
 pub const ByteOrder = enum { little, big };
 
+pub const Layout = struct {
+    class: Class,
+    order: ByteOrder,
+
+    pub fn pointerBits(self: Layout) u7 {
+        return if (self.class == .elf32) 32 else 64;
+    }
+
+    pub fn wordSize(self: Layout) u8 {
+        return if (self.class == .elf32) 4 else 8;
+    }
+
+    pub fn readWord(self: Layout, bytes: []const u8) u64 {
+        return if (self.class == .elf32) u32At(self.order, bytes[0..4]) else u64At(self.order, bytes[0..8]);
+    }
+
+    pub fn readU16(self: Layout, bytes: []const u8) u16 {
+        return u16At(self.order, bytes[0..2]);
+    }
+
+    pub fn readU32(self: Layout, bytes: []const u8) u32 {
+        return u32At(self.order, bytes[0..4]);
+    }
+
+    pub fn readU64(self: Layout, bytes: []const u8) u64 {
+        return u64At(self.order, bytes[0..8]);
+    }
+};
+
 pub const Region = struct {
     offset: u64,
     size: u64,
@@ -90,11 +119,15 @@ pub const Image = struct {
     }
 
     pub fn pointerBits(self: Image) u7 {
-        return if (self.class == .elf32) 32 else 64;
+        return self.layout().pointerBits();
     }
 
     pub fn wordSize(self: Image) u8 {
-        return if (self.class == .elf32) 4 else 8;
+        return self.layout().wordSize();
+    }
+
+    pub fn layout(self: Image) Layout {
+        return .{ .class = self.class, .order = self.order };
     }
 
     pub fn programHeader(self: Image, reader: anytype, index: u64) !ProgramHeader {
@@ -205,19 +238,19 @@ pub const Image = struct {
     }
 
     pub fn readWord(self: Image, bytes: []const u8) u64 {
-        return if (self.class == .elf32) u32At(self.order, bytes[0..4]) else u64At(self.order, bytes[0..8]);
+        return self.layout().readWord(bytes);
     }
 
     pub fn readU16(self: Image, bytes: []const u8) u16 {
-        return u16At(self.order, bytes[0..2]);
+        return self.layout().readU16(bytes);
     }
 
     pub fn readU32(self: Image, bytes: []const u8) u32 {
-        return u32At(self.order, bytes[0..4]);
+        return self.layout().readU32(bytes);
     }
 
     pub fn readU64(self: Image, bytes: []const u8) u64 {
-        return u64At(self.order, bytes[0..8]);
+        return self.layout().readU64(bytes);
     }
 };
 
