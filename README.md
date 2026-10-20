@@ -1,7 +1,15 @@
 # udmesg
 
+## Project status
+
+`udmesg` has outlived its original purpose. The
+[kexec-tools change to stream lockless printk records](https://github.com/horms/kexec-tools/commit/2bcd7801948d853499a5cc2b538f65563c791a1a)
+lets `vmcore-dmesg` extract the kernel log from `/proc/vmcore` in a crash kernel
+without copying the entire printk rings into memory. For this use case, use a
+`kexec-tools` build that includes that change instead of `udmesg`.
+
 `udmesg` is a small, static utility that extracts the Linux kernel log from the
-modern lockless printk ring stored in a raw ELF core. It is intended for
+modern lockless printk ring stored in a raw ELF core. It was created for
 memory-constrained crash kernels where copying a large descriptor, info, and
 text ring can trigger the OOM killer before any log is recovered.
 
