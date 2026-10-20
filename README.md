@@ -2,11 +2,19 @@
 
 ## Project status
 
-`udmesg` has outlived its original purpose. The
+The original need for `udmesg` was low-memory log extraction from `/proc/vmcore`
+in a crash kernel. The
 [kexec-tools change to stream lockless printk records](https://github.com/horms/kexec-tools/commit/2bcd7801948d853499a5cc2b538f65563c791a1a)
-lets `vmcore-dmesg` extract the kernel log from `/proc/vmcore` in a crash kernel
-without copying the entire printk rings into memory. For this use case, use a
-`kexec-tools` build that includes that change instead of `udmesg`.
+now lets `vmcore-dmesg` do that without copying the entire printk rings into
+memory.
+
+`udmesg-kdump` remains useful for saved crash dumps: it combines support for
+raw ELF cores and the compressed, flattened, and split makedumpfile formats
+supported by libkdumpfile. `vmcore-dmesg` reads raw ELF cores but not those
+makedumpfile formats, while `makedumpfile --dump-dmesg` is tied to the
+architecture it was built for. A single `udmesg-kdump` binary can read dumps
+from any architecture supported by libkdumpfile, including arm64 and x86_64,
+provided the dump has the VMCOREINFO needed for the lockless printk ring.
 
 `udmesg` is a small, static utility that extracts the Linux kernel log from the
 modern lockless printk ring stored in a raw ELF core. It was created for
