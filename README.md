@@ -73,7 +73,7 @@ The architecture of the binary running `udmesg` does not need to match the
 architecture recorded in the core.
 
 `udmesg-kdump` also accepts the ELF, KDUMP-compressed, flattened ELF/KDUMP, and
-split KDUMP formats supported by libkdumpfile 0.5.6. Pass every part of a split
+split KDUMP formats supported by libkdumpfile. Pass every part of a split
 dump as a positional argument. Its static build includes zlib, LZO, Snappy, and
 Zstandard support. Both binaries require the modern lockless printk ring
 identified by `SYMBOL(prb)` in VMCOREINFO; legacy printk rings, stdin, and
@@ -109,8 +109,11 @@ docker run --rm -v "$PWD:/work" -w /work alpine:3.22 \
   sh tools/build-kdump-static.sh 1.2.3
 ```
 
-This pins the Codeberg libkdumpfile 0.5.6 source archive and Zig 0.16.0 by
-SHA-256, builds all compression codecs into the binary, and produces
+This pins the Codeberg libkdumpfile source at commit
+[`ea0d0429`](https://codeberg.org/ptesarik/libkdumpfile/commit/ea0d0429ef319e71fa721e528129da80fd48988f),
+which fixes arm64 address translation for 52-bit kernels running with 48-bit
+virtual addresses. Both it and Zig 0.16.0 are pinned by SHA-256. The build
+includes all compression codecs and produces
 `zig-out/bin/udmesg-kdump-linux-amd64` or
 `zig-out/bin/udmesg-kdump-linux-arm64`. The binary needs no shared libraries
 at runtime. To use an existing static dependency build, pass its directory to

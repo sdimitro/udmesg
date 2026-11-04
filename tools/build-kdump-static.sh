@@ -27,9 +27,9 @@ work=/tmp/udmesg-kdump-build
 prefix=$work/prefix
 mkdir -p "$work" "$prefix/include/libkdumpfile" "$prefix/lib"
 
-curl -fsSL https://codeberg.org/ptesarik/libkdumpfile/archive/v0.5.6.tar.gz \
+curl -fsSL https://codeberg.org/ptesarik/libkdumpfile/archive/ea0d0429ef319e71fa721e528129da80fd48988f.tar.gz \
     -o "$work/libkdumpfile.tar.gz"
-echo "a4e9a247b8e2023278cb3951ee60542519a3f06b6a5fc7374b8f6c6e2547d121  $work/libkdumpfile.tar.gz" | sha256sum -c -
+echo "80d526594d59f3477ca5ed833b0babbcb1e34c761b85c3fff16089c45827ceaa  $work/libkdumpfile.tar.gz" | sha256sum -c -
 tar -xzf "$work/libkdumpfile.tar.gz" -C "$work"
 (
     cd "$work/libkdumpfile"
